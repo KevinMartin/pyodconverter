@@ -325,7 +325,7 @@ class DocumentConverter:
                 fileBasename = self._getFileBasename(outputUrl)
                 graphicExport = self.context.ServiceManager.createInstanceWithContext("com.sun.star.drawing.GraphicExportFilter", self.context)
                 
-                for pageIndex in xrange(pagesTotal):
+                for pageIndex in range(pagesTotal):
                     
                     page = drawPages.getByIndex(pageIndex)
                     fileName = "%s-%d.%s" % (self._getFileBasename(outputUrl), pageIndex, outputExt)

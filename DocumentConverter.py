@@ -261,32 +261,35 @@ IMAGES_MEDIA_TYPE = {
 
 class DocumentConversionException(Exception):
 
-    def __init__(self, message):
-        self.message = message
-
-    def __str__(self):
-        return self.message
+    def _get_message(self): 
+        return self._message
+    
+    def _set_message(self, message): 
+        self._message = message
+    
+    message = property(_get_message, _set_message)
 
 
 class DocumentConverter:
     
-    def __init__(self, port=DEFAULT_OPENOFFICE_PORT):
+    def __init__(self, listener=('localhost', DEFAULT_OPENOFFICE_PORT)):
+        address, port = listener
         localContext = uno.getComponentContext()
         resolver = localContext.ServiceManager.createInstanceWithContext("com.sun.star.bridge.UnoUrlResolver", localContext)
         try:
-            self.context = resolver.resolve("uno:socket,host=localhost,port=%s;urp;StarOffice.ComponentContext" % port)
+            self.context = resolver.resolve("uno:socket,host={0},port={1};urp;StarOffice.ComponentContext".format(address, port))
         except NoConnectException:
-            raise DocumentConversionException, "failed to connect to OpenOffice.org on port %s" % port
+            raise DocumentConversionException("failed to connect to OpenOffice.org on {0}:{1}".format(address, port))
         self.desktop = self.context.ServiceManager.createInstanceWithContext("com.sun.star.frame.Desktop", self.context)
 
     def convert(self, inputFile, outputFile, paperSize, paperOrientation):
         
-        if PAPER_SIZE_MAP.has_key(paperSize) is False:
+        if not paperSize in PAPER_SIZE_MAP:
             raise Exception("The paper size given doesn't exist.")
         else:
             paperSize = PAPER_SIZE_MAP[paperSize]
         
-        if PAPER_ORIENTATION_MAP.has_key(paperOrientation) is False:
+        if not paperOrientation in PAPER_ORIENTATION_MAP:
             raise Exception("The paper orientation given doesn't exist.")
         else:
             paperOrientation = PAPER_ORIENTATION_MAP[paperOrientation]
@@ -299,7 +302,7 @@ class DocumentConverter:
         inputExt = self._getFileExt(inputFile)
         outputExt = self._getFileExt(outputFile);
         
-        if IMPORT_FILTER_MAP.has_key(inputExt):
+        if inputExt in IMPORT_FILTER_MAP:
             loadProperties.update(IMPORT_FILTER_MAP[inputExt])
         
         document = self.desktop.loadComponentFromURL(inputUrl, "_blank", 0, self._toProperties(loadProperties))
@@ -310,54 +313,52 @@ class DocumentConverter:
 
         family = self._detectFamily(document)
         
-        '''
-        If the document is a presentation file and you wish convert it to a image,
-        each slide needs be converted to a individual image.
-        '''
-        if family is 'Presentation' and IMAGES_MEDIA_TYPE.has_key(outputExt):
+        try:
+            '''
+            If you wish convert a document to an image, so each page needs be converted to a individual image.
+            '''
+            if outputExt in IMAGES_MEDIA_TYPE:
+                
+                drawPages = document.getDrawPages()
+                pagesTotal = drawPages.getCount()
+                mediaType = IMAGES_MEDIA_TYPE[outputExt]
+                fileBasename = self._getFileBasename(outputUrl)
+                graphicExport = self.context.ServiceManager.createInstanceWithContext("com.sun.star.drawing.GraphicExportFilter", self.context)
+                
+                for pageIndex in xrange(pagesTotal):
+                    
+                    page = drawPages.getByIndex(pageIndex)
+                    fileName = "%s-%d.%s" % (self._getFileBasename(outputUrl), pageIndex, outputExt)
+                    
+                    graphicExport.setSourceDocument( page )
+                    
+                    props = {
+                        "MediaType": mediaType,
+                        "URL": fileName
+                    }
+                    
+                    graphicExport.filter( self._toProperties( props ) )
+            else:
+                
+                self._overridePageStyleProperties(document, family)
             
-            drawPages = document.getDrawPages()
-            pagesTotal = drawPages.getCount()
-            mediaType = IMAGES_MEDIA_TYPE[outputExt]
-            fileBasename = self._getFileBasename(outputUrl)
-            graphicExport = self.context.ServiceManager.createInstanceWithContext("com.sun.star.drawing.GraphicExportFilter", self.context)
-            
-            for pageIndex in xrange(pagesTotal):
+                storeProperties = self._getStoreProperties(document, outputExt)
                 
-                page = drawPages.getByIndex(pageIndex)
-                fileName = "%s-%d.%s" % (self._getFileBasename(outputUrl), pageIndex, outputExt)
-                
-                graphicExport.setSourceDocument( page )
-                
-                props = {
-                    "MediaType": mediaType,
-                    "URL": fileName
+                printConfigs = {
+                    'AllSheets': True,
+                    'Size': paperSize,
+                    'PaperFormat': USER,
+                    'PaperOrientation': paperOrientation
                 }
                 
-                graphicExport.filter( self._toProperties( props ) )
+                document.setPrinter( self._toProperties( printConfigs ) )
             
-            document.close(True)
-            exit(0)
-        
-        self._overridePageStyleProperties(document, family)
-        
-        outputExt = self._getFileExt(outputFile)
-        storeProperties = self._getStoreProperties(document, outputExt)
-        
-        printConfigs = {
-            'Size': paperSize,
-            'PaperFormat': USER,
-            'PaperOrientation': paperOrientation
-        }
-        document.setPrinter( self._toProperties( printConfigs ) )
-        
-        try:
-            document.storeToURL(outputUrl, self._toProperties(storeProperties))
+                document.storeToURL(outputUrl, self._toProperties(storeProperties))
         finally:
             document.close(True)
 
     def _overridePageStyleProperties(self, document, family):
-        if PAGE_STYLE_OVERRIDE_PROPERTIES.has_key(family):
+        if family in PAGE_STYLE_OVERRIDE_PROPERTIES:
             styleFamilies = document.getStyleFamilies()
             if styleFamilies.hasByName('PageStyles'):
                 properties = PAGE_STYLE_OVERRIDE_PROPERTIES[family]
@@ -372,11 +373,11 @@ class DocumentConverter:
         try:
             propertiesByFamily = EXPORT_FILTER_MAP[outputExt]
         except KeyError:
-            raise DocumentConversionException, "unknown output format: '%s'" % outputExt
+            raise DocumentConversionException("unknown output format: '%s'" % outputExt)
         try:
             return propertiesByFamily[family]
         except KeyError:
-            raise DocumentConversionException, "unsupported conversion: from '%s' to '%s'" % (family, outputExt)
+            raise DocumentConversionException("unsupported conversion: from '%s' to '%s'" % (family, outputExt))
     
     def _detectFamily(self, document):
         if document.supportsService("com.sun.star.text.WebDocument"):
@@ -390,7 +391,7 @@ class DocumentConverter:
             return FAMILY_PRESENTATION
         if document.supportsService("com.sun.star.drawing.DrawingDocument"):
             return FAMILY_DRAWING
-        raise DocumentConversionException, "unknown document family: %s" % document
+        raise DocumentConversionException("unknown document family: %s" % document)
 
     def _getFileExt(self, path):
         ext = splitext(path)[1]
@@ -417,7 +418,7 @@ class DocumentConverter:
 
     def _dump(self, obj):
         for attr in dir(obj):
-            print "obj.%s = %s\n" % (attr, getattr(obj, attr))
+            print("obj.%s = %s\n" % (attr, getattr(obj, attr)))
 
 if __name__ == "__main__":
     
@@ -434,16 +435,15 @@ if __name__ == "__main__":
         parser.error("wrong number of arguments")
     
     if not isfile(args[0]):
-        print "No such input file: %s" % args[0]
+        print("No such input file: %s" % args[0])
         exit(1)
         
     try:
         converter = DocumentConverter()    
         converter.convert(args[0], args[1], options.paper_size, options.paper_orientation)
-    except DocumentConversionException, exception:
-        print "ERROR! " + str(exception)
+    except DocumentConversionException as exception:
+        print("ERROR! " + str(exception))
         exit(1)
-    except ErrorCodeIOException, exception:
-        print "ERROR! ErrorCodeIOException %d" % exception.ErrCode
+    except ErrorCodeIOException as exception:
+        print("ERROR! ErrorCodeIOException %d" % exception.ErrCode)
         exit(1)
-
